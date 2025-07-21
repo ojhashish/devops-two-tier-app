@@ -1,0 +1,19 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5001:5001" # Host 5001 maps to container 5001
+    environment:
+      PYTHONUNBUFFERED: 1
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3000" # Host 3001 maps to container 3000 (Next.js default)
+    depends_on:
+      - backend
+    environment:
+      # Frontend reaches backend via its service name and the container's internal port
+      NEXT_PUBLIC_BACKEND_URL: http://backend:5001

@@ -1,0 +1,4 @@
+# backend/requirements.txt
+flask
+pytest
+Flask-Cors
