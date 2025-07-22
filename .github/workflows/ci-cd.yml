@@ -4,14 +4,11 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - develop
+      - develop # Trigger on push to develop
+      - main    # Trigger on push to main (for deployment)
   pull_request:
     branches:
       - develop
-  # This push to main trigger will be used for deployment later
-  push:
-    branches:
-      - main
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -19,7 +16,6 @@ env:
   ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
 
 jobs:
-  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
