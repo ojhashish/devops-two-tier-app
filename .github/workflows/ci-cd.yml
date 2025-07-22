@@ -1,0 +1,128 @@
+# .github/workflows/ci-cd.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - develop
+  # This push to main trigger will be used for deployment later
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }}
+  ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Backend Tests
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9' # Ensure this matches your project's Python version
+      - name: Install backend dependencies (in venv for CI)
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r backend/requirements.txt
+      - name: Run backend tests
+        run: |
+          source venv/bin/activate
+          pytest backend/test_app.py
+
+      # Frontend Tests
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18' # Ensure this matches your project's Node.js version
+      - name: Install frontend dependencies
+        run: |
+          npm install --prefix frontend
+      - name: Run frontend build (pre-check for E2E)
+        run: |
+          npm run build --prefix frontend
+
+      # Start services with Docker Compose for E2E tests in CI
+      - name: Start services for E2E tests
+        run: |
+          docker-compose -f docker-compose.yml up -d --build
+        # Give services time to start up, wait for frontend on its *host* port
+      - name: Wait for frontend service to be ready
+        uses: c-py/wait-on-action@v1.2
+        with:
+          wait-on-url: 'http://localhost:3001' # Wait for frontend to be available on the host port
+          timeout: 120 # Max wait time in seconds
+
+      - name: Run frontend E2E tests
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          # `start` command not needed here as docker-compose handles it
+          browser: chrome # Run tests in Chrome
+
+      # Docker Login to ECR
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build and Push Backend Docker Image
+      - name: Build and push backend Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }} # Uses the Git commit SHA as the tag
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
+          docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG
+
+      # Build and Push Frontend Docker Image
+      - name: Build and push frontend Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG ./frontend
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG
+
+  deploy:
+    needs: build-and-test # This job depends on successful build and test
+    if: github.ref == 'refs/heads/main' # Only deploy when merging to main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Terraform
+        run: terraform init
+
+      - name: Apply Terraform (Deploy)
+        run: terraform apply -auto-approve
+        env:
+          # Pass variables to Terraform (using the image tagged with Git SHA)
+          TF_VAR_backend_image: ${{ secrets.ECR_BACKEND_URI }}:${{ github.sha }}
+          TF_VAR_frontend_image: ${{ secrets.ECR_FRONTEND_URI }}:${{ github.sha }}
