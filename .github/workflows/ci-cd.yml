@@ -1,15 +1,17 @@
+# .github/workflows/ci-cd.yml
 name: CI/CD Pipeline
 
 on:
-  # Triggers the workflow on push or pull request events for the specified branches
   push:
     branches:
-      - develop # For continuous integration (build, test, ECR push)
-      - main    # For continuous deployment (triggers after build, test, ECR push)
-  # Keep the pull_request trigger separate if you want different behavior for PRs
+      - develop
   pull_request:
     branches:
-      - develop # For running tests on pull requests to develop
+      - develop
+  # This push to main trigger will be used for deployment later
+  push:
+    branches:
+      - main
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -23,7 +25,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --- Backend Build & Test ---
+      # Backend Tests
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -33,16 +35,16 @@ jobs:
           python -m venv venv
           source venv/bin/activate
           pip install -r backend/requirements.txt
-      - name: Run backend unit tests
+      - name: Run backend tests
         run: |
           source venv/bin/activate
           pytest backend/test_app.py
 
-      # --- Frontend Build & Test ---
+      # Frontend Tests
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22.17.1' # Ensure this matches your project's Node.js version
+          node-version: 'v22.17.1' # Ensure this matches your project's Node.js version
       - name: Install frontend dependencies
         run: |
           npm install --prefix frontend
@@ -53,82 +55,42 @@ jobs:
       # Start services with Docker Compose for E2E tests in CI
       - name: Start services for E2E tests
         run: |
-          # Use the already present docker-compose.yml at the root
           docker-compose -f docker-compose.yml up -d --build
+        # Give services time to start up, wait for frontend on its *host* port
       - name: Wait for frontend service to be ready
-        run: |
-          echo "Waiting for frontend service at http://localhost:3001..."
-          TIMEOUT=120
-          COUNT=0
-          while [ $COUNT -lt $TIMEOUT ]; do
-            if curl -sS "http://localhost:3001" > /dev/null; then
-              echo "Frontend service is ready!"
-              break
-            fi
-            echo "Still waiting... ($COUNT/$TIMEOUT seconds)"
-            sleep 1
-            COUNT=$((COUNT+1))
-          done
-          if [ $COUNT -eq $TIMEOUT ]; then
-            echo "Frontend service did not become ready within $TIMEOUT seconds."
-            exit 1 # Fail the step if timeout reached
-          fi
-      # ... (previous frontend build/test steps) ...
+        uses: c-py/wait-on-action@v1.2
+        with:
+          wait-on-url: 'http://localhost:3001' # Wait for frontend to be available on the host port
+          timeout: 120 # Max wait time in seconds
 
-      # --- Custom wait-on step begins ---
-      - name: Install curl (if not present)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl
-
-      - name: Wait for frontend service to be ready
-        run: |
-          echo "Waiting for frontend service at http://localhost:3001..."
-          TIMEOUT=120
-          COUNT=0
-          while [ $COUNT -lt $TIMEOUT ]; do
-            if curl -sS "http://localhost:3001" > /dev/null; then
-              echo "Frontend service is ready!"
-              break
-            fi
-            echo "Still waiting... ($COUNT/$TIMEOUT seconds)"
-            sleep 1
-            COUNT=$((COUNT+1))
-          done
-          if [ $COUNT -eq $TIMEOUT ]; then
-            echo "Frontend service did not become ready within $TIMEOUT seconds."
-            exit 1 # Fail the step if timeout reached
-          fi
-      # --- Custom wait-on step ends ---
-
-      # ... (rest of your Docker login/ECR push steps) ... 
       - name: Run frontend E2E tests
         uses: cypress-io/github-action@v6
         with:
-          working-directory: frontend # Run Cypress from the frontend directory
+          working-directory: frontend
+          # `start` command not needed here as docker-compose handles it
           browser: chrome # Run tests in Chrome
 
-      # --- Docker Login & ECR Push ---
+      # Docker Login to ECR
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }} # Uses the region set in the env block
+          aws-region: ${{ env.AWS_REGION }}
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build and Push Backend Docker Image to ECR
+      # Build and Push Backend Docker Image
       - name: Build and push backend Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} # Use the Git commit SHA as the tag for unique versions
+          IMAGE_TAG: ${{ github.sha }} # Uses the Git commit SHA as the tag
         run: |
           docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
           docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG
 
-      # Build and Push Frontend Docker Image to ECR
+      # Build and Push Frontend Docker Image
       - name: Build and push frontend Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -138,36 +100,29 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG
 
   deploy:
-    needs: build-and-test # This job depends on a successful build and test run
-    # This condition ensures deployment only happens when changes are merged into the 'main' branch
-    if: github.ref == 'refs/heads/main' 
+    needs: build-and-test # This job depends on successful build and test
+    if: github.ref == 'refs/heads/main' # Only deploy when merging to main
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Configure AWS credentials for Terraform
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }} # Uses the region set in the env block
+          aws-region: ${{ env.AWS_REGION }}
 
-      # Install Terraform CLI
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # Initialize Terraform (e.g., download providers, set up backend)
       - name: Initialize Terraform
         run: terraform init
-        working-directory: terraform # Run terraform commands from the 'terraform' directory
 
-      # Apply Terraform (provision/update infrastructure)
       - name: Apply Terraform (Deploy)
         run: terraform apply -auto-approve
-        working-directory: terraform # Run terraform commands from the 'terraform' directory
         env:
-          # Pass Docker image tags to Terraform as variables
-          TF_VAR_backend_image: ${{ env.ECR_BACKEND_URI }}:${{ github.sha }}
-          TF_VAR_frontend_image: ${{ env.ECR_FRONTEND_URI }}:${{ github.sha }}
+          # Pass variables to Terraform (using the image tagged with Git SHA)
+          TF_VAR_backend_image: ${{ secrets.ECR_BACKEND_URI }}:${{ github.sha }}
+          TF_VAR_frontend_image: ${{ secrets.ECR_FRONTEND_URI }}:${{ github.sha }}
