@@ -1,12 +1,15 @@
 name: CI/CD Pipeline
+
 on:
+  # Triggers the workflow on push or pull request events for the specified branches
   push:
     branches:
-      - develop # Trigger on push to develop
-      - main    # Trigger on push to main (for deployment)
+      - develop # For continuous integration (build, test, ECR push)
+      - main    # For continuous deployment (triggers after build, test, ECR push)
+  # Keep the pull_request trigger separate if you want different behavior for PRs
   pull_request:
     branches:
-      - develop
+      - develop # For running tests on pull requests to develop
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -14,31 +17,32 @@ env:
   ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
 
 jobs:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Backend Tests
+      # --- Backend Build & Test ---
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9' # Ensure this matches your project's Python version
+          python-version: '3.13.5' # Ensure this matches your project's Python version
       - name: Install backend dependencies (in venv for CI)
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install -r backend/requirements.txt
-      - name: Run backend tests
+      - name: Run backend unit tests
         run: |
           source venv/bin/activate
           pytest backend/test_app.py
 
-      # Frontend Tests
+      # --- Frontend Build & Test ---
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18' # Ensure this matches your project's Node.js version
+          node-version: '22.17.1' # Ensure this matches your project's Node.js version
       - name: Install frontend dependencies
         run: |
           npm install --prefix frontend
@@ -49,42 +53,41 @@ jobs:
       # Start services with Docker Compose for E2E tests in CI
       - name: Start services for E2E tests
         run: |
+          # Use the already present docker-compose.yml at the root
           docker-compose -f docker-compose.yml up -d --build
-        # Give services time to start up, wait for frontend on its *host* port
       - name: Wait for frontend service to be ready
         uses: c-py/wait-on-action@v1.2
         with:
-          wait-on-url: 'http://localhost:3001' # Wait for frontend to be available on the host port
+          wait-on-url: 'http://localhost:3001' # Wait for frontend (exposed on host port 3001 by docker-compose)
           timeout: 120 # Max wait time in seconds
 
       - name: Run frontend E2E tests
         uses: cypress-io/github-action@v6
         with:
-          working-directory: frontend
-          # `start` command not needed here as docker-compose handles it
+          working-directory: frontend # Run Cypress from the frontend directory
           browser: chrome # Run tests in Chrome
 
-      # Docker Login to ECR
+      # --- Docker Login & ECR Push ---
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }} # Uses the region set in the env block
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build and Push Backend Docker Image
+      # Build and Push Backend Docker Image to ECR
       - name: Build and push backend Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} # Uses the Git commit SHA as the tag
+          IMAGE_TAG: ${{ github.sha }} # Use the Git commit SHA as the tag for unique versions
         run: |
           docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
           docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG
 
-      # Build and Push Frontend Docker Image
+      # Build and Push Frontend Docker Image to ECR
       - name: Build and push frontend Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -94,29 +97,36 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG
 
   deploy:
-    needs: build-and-test # This job depends on successful build and test
-    if: github.ref == 'refs/heads/main' # Only deploy when merging to main
+    needs: build-and-test # This job depends on a successful build and test run
+    # This condition ensures deployment only happens when changes are merged into the 'main' branch
+    if: github.ref == 'refs/heads/main' 
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Configure AWS credentials for Terraform
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }} # Uses the region set in the env block
 
+      # Install Terraform CLI
       - name: Install Terraform
         uses: hashicorp/setup-terraform@v3
 
+      # Initialize Terraform (e.g., download providers, set up backend)
       - name: Initialize Terraform
         run: terraform init
+        working-directory: terraform # Run terraform commands from the 'terraform' directory
 
+      # Apply Terraform (provision/update infrastructure)
       - name: Apply Terraform (Deploy)
         run: terraform apply -auto-approve
+        working-directory: terraform # Run terraform commands from the 'terraform' directory
         env:
-          # Pass variables to Terraform (using the image tagged with Git SHA)
-          TF_VAR_backend_image: ${{ secrets.ECR_BACKEND_URI }}:${{ github.sha }}
-          TF_VAR_frontend_image: ${{ secrets.ECR_FRONTEND_URI }}:${{ github.sha }}
+          # Pass Docker image tags to Terraform as variables
+          TF_VAR_backend_image: ${{ env.ECR_BACKEND_URI }}:${{ github.sha }}
+          TF_VAR_frontend_image: ${{ env.ECR_FRONTEND_URI }}:${{ github.sha }}
