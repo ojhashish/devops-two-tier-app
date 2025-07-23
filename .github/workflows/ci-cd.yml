@@ -73,6 +73,35 @@ jobs:
             echo "Frontend service did not become ready within $TIMEOUT seconds."
             exit 1 # Fail the step if timeout reached
           fi
+      # ... (previous frontend build/test steps) ...
+
+      # --- Custom wait-on step begins ---
+      - name: Install curl (if not present)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+
+      - name: Wait for frontend service to be ready
+        run: |
+          echo "Waiting for frontend service at http://localhost:3001..."
+          TIMEOUT=120
+          COUNT=0
+          while [ $COUNT -lt $TIMEOUT ]; do
+            if curl -sS "http://localhost:3001" > /dev/null; then
+              echo "Frontend service is ready!"
+              break
+            fi
+            echo "Still waiting... ($COUNT/$TIMEOUT seconds)"
+            sleep 1
+            COUNT=$((COUNT+1))
+          done
+          if [ $COUNT -eq $TIMEOUT ]; then
+            echo "Frontend service did not become ready within $TIMEOUT seconds."
+            exit 1 # Fail the step if timeout reached
+          fi
+      # --- Custom wait-on step ends ---
+
+      # ... (rest of your Docker login/ECR push steps) ... 
       - name: Run frontend E2E tests
         uses: cypress-io/github-action@v6
         with:
