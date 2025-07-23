@@ -56,7 +56,7 @@ jobs:
           # Use the already present docker-compose.yml at the root
           docker-compose -f docker-compose.yml up -d --build
       - name: Wait for frontend service to be ready
-        uses: c-py/wait-on-action@v1.2
+        uses: wait-on/wait-on-action@v1.2
         with:
           wait-on-url: 'http://localhost:3001' # Wait for frontend (exposed on host port 3001 by docker-compose)
           timeout: 120 # Max wait time in seconds
