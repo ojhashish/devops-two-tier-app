@@ -12,9 +12,9 @@ on:
 
 env:
   # These environment variables use GitHub secrets for sensitive data and dynamic values
-  AWS_REGION: ${{ secrets.AWS_REGION }} # e.g., ap-south-1 (must match your ECR region)
-  ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }} # Full ECR URI for backend repo
-  ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }} # Full ECR URI for frontend repo
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }}
+  ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
 
 jobs:
   build-and-test:
