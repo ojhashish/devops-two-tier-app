@@ -1,128 +1,154 @@
-# .github/workflows/ci-cd.yml
 name: CI/CD Pipeline
 
 on:
+  # Triggers the workflow on push or pull request events for the specified branches
   push:
     branches:
-      - develop
+      - develop # For continuous integration (build, test, ECR push)
+      - main    # For continuous deployment (triggers after build, test, ECR push)
   pull_request:
     branches:
-      - develop
-  # This push to main trigger will be used for deployment later
-  push:
-    branches:
-      - main
+      - develop # For running tests on pull requests to develop
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }}
-  ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
+  # These environment variables use GitHub secrets for sensitive data and dynamic values
+  AWS_REGION: ${{ secrets.AWS_REGION }} # e.g., ap-south-1 (must match your ECR region)
+  ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }} # Full ECR URI for backend repo
+  ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }} # Full ECR URI for frontend repo
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest # Use a fresh Ubuntu runner for each job
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # Action to check out your repository code
 
-      # Backend Tests
-      - name: Set up Python
+      # --- Backend Build & Unit Test ---
+      - name: Set up Python environment
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13.5' # Ensure this matches your project's Python version
-      - name: Install backend dependencies (in venv for CI)
+          python-version: '3.13.5' # Specify the Python version your backend uses
+      - name: Install backend dependencies
         run: |
+          # Create and activate a Python virtual environment for isolated dependencies
           python -m venv venv
           source venv/bin/activate
-          pip install -r backend/requirements.txt
-      - name: Run backend tests
+          pip install -r backend/requirements.txt # Install dependencies from requirements.txt
+      - name: Run backend unit tests
         run: |
-          source venv/bin/activate
-          pytest backend/test_app.py
+          source venv/bin/activate # Activate venv to run tests
+          pytest backend/test_app.py # Execute backend unit tests
 
-      # Frontend Tests
-      - name: Set up Node.js
+      # --- Frontend Build & E2E Test ---
+      - name: Set up Node.js environment
         uses: actions/setup-node@v4
         with:
-          node-version: 'v22.17.1' # Ensure this matches your project's Node.js version
+          node-version: '22.17.1' # Specify the Node.js version your frontend uses
       - name: Install frontend dependencies
         run: |
-          npm install --prefix frontend
+          npm install --prefix frontend # Install npm dependencies in the frontend directory
       - name: Run frontend build (pre-check for E2E)
         run: |
-          npm run build --prefix frontend
+          npm run build --prefix frontend # Build the Next.js app to catch build errors early
 
-      # Start services with Docker Compose for E2E tests in CI
+      # Start services with Docker Compose for E2E tests in CI environment
       - name: Start services for E2E tests
         run: |
+          # Use the docker-compose.yml located at the root of your repository
+          # --build: ensures images are built from Dockerfiles
+          # -d: runs containers in detached mode (background)
           docker-compose -f docker-compose.yml up -d --build
-        # Give services time to start up, wait for frontend on its *host* port
+      
+      # Ensure curl is available for the custom wait script
+      - name: Install curl (if not present)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+
+      # Custom bash script to wait for the frontend service to be ready
       - name: Wait for frontend service to be ready
-        uses: c-py/wait-on-action@v1.2
-        with:
-          wait-on-url: 'http://localhost:3001' # Wait for frontend to be available on the host port
-          timeout: 120 # Max wait time in seconds
+        run: |
+          echo "Waiting for frontend service at http://localhost:3001..."
+          TIMEOUT=120 # Max wait time in seconds
+          COUNT=0
+          while [ $COUNT -lt $TIMEOUT ]; do
+            # Use curl to check if the frontend is reachable. -sS suppresses progress/error output.
+            if curl -sS "http://localhost:3001" > /dev/null; then
+              echo "Frontend service is ready!"
+              break # Exit loop if service is ready
+            fi
+            echo "Still waiting... ($COUNT/$TIMEOUT seconds)"
+            sleep 1 # Wait for 1 second before retrying
+            COUNT=$((COUNT+1))
+          done
+          # If timeout is reached, fail the step
+          if [ $COUNT -eq $TIMEOUT ]; then
+            echo "Frontend service did not become ready within $TIMEOUT seconds."
+            exit 1 # Fail the workflow step
+          fi
 
       - name: Run frontend E2E tests
-        uses: cypress-io/github-action@v6
+        uses: cypress-io/github-action@v6 # Use the Cypress GitHub Action
         with:
-          working-directory: frontend
-          # `start` command not needed here as docker-compose handles it
-          browser: chrome # Run tests in Chrome
+          working-directory: frontend # Specify the directory where Cypress project is located
+          browser: chrome # Run tests in the Chrome browser
 
-      # Docker Login to ECR
+      # --- Docker Login & ECR Push ---
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v4 # Action to set up AWS credentials
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }} # Use the AWS_REGION defined in the env block
       - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr # Assign an ID to this step to reference its outputs
+        uses: aws-actions/amazon-ecr-login@v2 # Action to log in to ECR
 
-      # Build and Push Backend Docker Image
       - name: Build and push backend Docker image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} # Uses the Git commit SHA as the tag
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }} # Get ECR registry URL from login step
+          IMAGE_TAG: ${{ github.sha }} # Use the Git commit SHA as the Docker image tag for uniqueness
         run: |
+          # Build the backend image, tag it with the ECR registry and commit SHA
           docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
-          docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG # Push the image to ECR
 
-      # Build and Push Frontend Docker Image
       - name: Build and push frontend Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          # Build the frontend image, tag it with the ECR registry and commit SHA
           docker build -t $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG ./frontend
-          docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG # Push the image to ECR
 
   deploy:
-    needs: build-and-test # This job depends on successful build and test
-    if: github.ref == 'refs/heads/main' # Only deploy when merging to main
+    needs: build-and-test # This job will only run if the 'build-and-test' job succeeds
+    # This condition ensures deployment only happens when changes are merged into the 'main' branch
+    if: github.ref == 'refs/heads/main' 
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials for Terraform
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }} # Use the AWS_REGION defined in the env block
 
-      - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Install Terraform CLI
+        uses: hashicorp/setup-terraform@v3 # Action to install Terraform CLI
 
       - name: Initialize Terraform
-        run: terraform init
+        run: terraform init # Initialize Terraform (e.g., download providers, set up backend)
+        working-directory: terraform # Specify the directory where your Terraform files are located
 
-      - name: Apply Terraform (Deploy)
-        run: terraform apply -auto-approve
+      - name: Apply Terraform (Deploy Infrastructure)
+        run: terraform apply -auto-approve # Apply Terraform changes without manual confirmation
+        working-directory: terraform # Specify the directory where your Terraform files are located
         env:
-          # Pass variables to Terraform (using the image tagged with Git SHA)
-          TF_VAR_backend_image: ${{ secrets.ECR_BACKEND_URI }}:${{ github.sha }}
-          TF_VAR_frontend_image: ${{ secrets.ECR_FRONTEND_URI }}:${{ github.sha }}
+          # Pass Docker image tags to Terraform as variables (TF_VAR_ prefix is required)
+          TF_VAR_backend_image: ${{ env.ECR_BACKEND_URI }}:${{ github.sha }}
+          TF_VAR_frontend_image: ${{ env.ECR_FRONTEND_URI }}:${{ github.sha }}
