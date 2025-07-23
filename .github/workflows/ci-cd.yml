@@ -50,6 +50,8 @@ jobs:
       - name: Run frontend build (pre-check for E2E)
         run: |
           npm run build --prefix frontend # Build the Next.js app to catch build errors early
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3 # Use a recent stable version
 
       # Start services with Docker Compose for E2E tests in CI environment
       - name: Start services for E2E tests
