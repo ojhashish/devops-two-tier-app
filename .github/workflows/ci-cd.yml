@@ -56,11 +56,23 @@ jobs:
           # Use the already present docker-compose.yml at the root
           docker-compose -f docker-compose.yml up -d --build
       - name: Wait for frontend service to be ready
-        uses: jeffrafter/wait-on-action@v1
-        with:
-          wait-on-url: 'http://localhost:3001' # Wait for frontend (exposed on host port 3001 by docker-compose)
-          timeout: 120 # Max wait time in seconds
-
+        run: |
+          echo "Waiting for frontend service at http://localhost:3001..."
+          TIMEOUT=120
+          COUNT=0
+          while [ $COUNT -lt $TIMEOUT ]; do
+            if curl -sS "http://localhost:3001" > /dev/null; then
+              echo "Frontend service is ready!"
+              break
+            fi
+            echo "Still waiting... ($COUNT/$TIMEOUT seconds)"
+            sleep 1
+            COUNT=$((COUNT+1))
+          done
+          if [ $COUNT -eq $TIMEOUT ]; then
+            echo "Frontend service did not become ready within $TIMEOUT seconds."
+            exit 1 # Fail the step if timeout reached
+          fi
       - name: Run frontend E2E tests
         uses: cypress-io/github-action@v6
         with:
