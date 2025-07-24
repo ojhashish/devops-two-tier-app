@@ -12,7 +12,7 @@ on:
 
 env:
   # These environment variables use GitHub secrets for sensitive data and dynamic values
-  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_REGION: ${{ secrets.AWS_REGION }} # verified secrets
   ECR_BACKEND_URI: ${{ secrets.ECR_BACKEND_URI }}
   ECR_FRONTEND_URI: ${{ secrets.ECR_FRONTEND_URI }}
 
@@ -112,7 +112,7 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }} # Get ECR registry URL from login step
           IMAGE_TAG: ${{ github.sha }} # Use the Git commit SHA as the Docker image tag for uniqueness
         run: |
-          # Build the backend image, tag it with the ECR registry and commit SHA
+          echo "Attempting to build and push backend image to: $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG"
           docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
           docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG # Push the image to ECR
 
@@ -121,7 +121,7 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Build the frontend image, tag it with the ECR registry and commit SHA
+          echo "Attempting to build and push frontend image to: $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG"
           docker build -t $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG ./frontend
           docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG # Push the image to ECR
 
