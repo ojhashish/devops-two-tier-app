@@ -112,18 +112,18 @@ jobs:
          # ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }} # Get ECR registry URL from login step
           IMAGE_TAG: ${{ github.run_number }} # Use the Git commit SHA as the Docker image tag for uniqueness
         run: |
-          echo "Attempting to build and push backend image to: $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG"
-          docker build -t $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG ./backend
-          docker push $ECR_REGISTRY/$ECR_BACKEND_URI:$IMAGE_TAG # Push the image to ECR
+          echo "Attempting to build and push backend image to: ${{ env.ECR_BACKEND_URI }}:$IMAGE_TAG"
+          docker build -t ${{ env.ECR_BACKEND_URI }}:$IMAGE_TAG ./backend
+          docker push ${{ env.ECR_BACKEND_URI }}:$IMAGE_TAG
 
       - name: Build and push frontend Docker image
         env:
          # ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.run_number }}
         run: |
-          echo "Attempting to build and push frontend image to: $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG"
-          docker build -t $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG ./frontend
-          docker push $ECR_REGISTRY/$ECR_FRONTEND_URI:$IMAGE_TAG # Push the image to ECR
+          echo "Attempting to build and push frontend image to: ${{ env.ECR_FRONTEND_URI }}:$IMAGE_TAG"
+          docker build -t ${{ env.ECR_FRONTEND_URI }}:$IMAGE_TAG ./frontend
+          docker push ${{ env.ECR_FRONTEND_URI }}:$IMAGE_TAG
 
   deploy:
     needs: build-and-test # This job will only run if the 'build-and-test' job succeeds
