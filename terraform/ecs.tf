@@ -126,7 +126,7 @@ resource "aws_ecs_task_definition" "frontend" {
           name  = "NEXT_PUBLIC_BACKEND_URL"
           # Frontend reaches backend via ALB DNS name and the specific path
           # The ALB will route /api/* and /health to the backend service.
-          value = "http://${aws_lb.main.dns_name}/api" # Note: ALB listener rule paths
+          value = "http://${aws_lb.main.dns_name}" # Note: ALB listener rule paths
         }
       ]
       logConfiguration = {
