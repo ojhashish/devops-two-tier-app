@@ -146,11 +146,11 @@ jobs:
 
       - name: Initialize Terraform
         run: terraform init # Initialize Terraform (e.g., download providers, set up backend)
-        working-directory: terraform # Specify the directory where your Terraform files are located
+        working-directory: terraform
 
       - name: Apply Terraform (Deploy Infrastructure)
         run: terraform apply -auto-approve # Apply Terraform changes without manual confirmation
-        working-directory: terraform # Specify the directory where your Terraform files are located
+        working-directory: terraform
         env:
           # Pass Docker image tags to Terraform as variables (TF_VAR_ prefix is required)
           TF_VAR_backend_image: ${{ env.ECR_BACKEND_URI }}:${{ github.run_number }}
