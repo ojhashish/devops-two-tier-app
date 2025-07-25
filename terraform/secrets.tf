@@ -1,7 +1,7 @@
 # terraform/secrets.tf
 resource "aws_secretsmanager_secret" "example_secret" {
-  name = "${var.project_name}/example-secret"
-  description = "An example secret for the application"
+  name = "${var.project_name}/example-secret-v2"
+  description = "An example secret for the application v2"
   # Optional: Add a recovery window in days for deleted secrets
   # recovery_window_in_days = 7
 }
