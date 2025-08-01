@@ -62,7 +62,7 @@ jobs:
           # -d: runs containers in detached mode (background)
           docker-compose -f docker-compose.yml up -d --build
       
-      # Ensure curl is available for the custom wait script
+      
       - name: Install curl (if not present)
         run: |
           sudo apt-get update
