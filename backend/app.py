@@ -3,7 +3,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS # Added for CORS
 
 app = Flask(__name__)
-CORS(app) # Enable CORS for all origins (for local dev)
+CORS(app) 
 
 @app.route('/health')
 def health_check():
